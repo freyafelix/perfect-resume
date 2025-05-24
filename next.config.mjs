@@ -25,9 +25,7 @@ const nextConfig = {
     
     return config
   },
-  experimental: {
-    serverComponentsExternalPackages: ['pdf-parse', 'mammoth', 'tesseract.js']
-  }
+  serverExternalPackages: ['pdf-parse', 'mammoth', 'tesseract.js']
 }
 
 export default nextConfig
