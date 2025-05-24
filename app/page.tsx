@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Loader2 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import { getParsingProgress, validateFile, parseResumeFile } from "../lib/file-parser"
@@ -19,6 +19,17 @@ interface JobInsight {
   content: string
 }
 
+// 解析优化后简历的差异标记
+function parseOptimizedResume(content: string) {
+  if (!content) return content
+
+  // 替换标记为带样式的span
+  return content
+    .replace(/<add>(.*?)<\/add>/g, '<span class="resume-added">$1</span>')
+    .replace(/<del>(.*?)<\/del>/g, '<span class="resume-deleted">$1</span>')
+    .replace(/<optimize>(.*?)<\/optimize>/g, '<span class="resume-optimized">$1</span>')
+}
+
 export default function ResumeGenerator() {
   const [jobDescription, setJobDescription] = useState("")
   const [additionalExperience, setAdditionalExperience] = useState("")
@@ -32,6 +43,14 @@ export default function ResumeGenerator() {
   const [isParsingFile, setIsParsingFile] = useState(false)
   const [parsingProgress, setParsingProgress] = useState("")
   const [showFeedback, setShowFeedback] = useState(false)
+  // 新增流式分析相关状态
+  const [analysisProgress, setAnalysisProgress] = useState({ step: 0, total: 4, message: "" })
+  const [partialResult, setPartialResult] = useState<Partial<AnalysisResult> | null>(null)
+  const [isOptimizing, setIsOptimizing] = useState(false)
+  // 反馈表单相关状态
+  const [feedbackType, setFeedbackType] = useState("")
+  const [feedbackContent, setFeedbackContent] = useState("")
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false)
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -72,6 +91,11 @@ export default function ResumeGenerator() {
     }
 
     setIsAnalyzing(true)
+    setPartialResult(null)
+    setAnalysisResult(null)
+    setIsOptimizing(false)
+    setAnalysisProgress({ step: 0, total: 4, message: "准备开始分析..." })
+
     try {
       const resumeText = resumeContent || (resumeFile ? `已上传简历文件: ${resumeFile.name}` : "")
 
@@ -87,39 +111,85 @@ export default function ResumeGenerator() {
         }),
       })
 
-      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
 
-      if (result.success) {
-        setAnalysisResult(result.data)
-        setTimeout(() => {
-          document.getElementById("result-section")?.scrollIntoView({ behavior: "smooth" })
-        }, 100)
-      } else {
-        alert(`分析失败: ${result.error}`)
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error("无法获取响应流")
+      }
+
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ""
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              switch (data.type) {
+                case "progress":
+                  setAnalysisProgress({
+                    step: data.step,
+                    total: data.total,
+                    message: data.message
+                  })
+                  if (data.step === 4) {
+                    setIsOptimizing(true)
+                  }
+                  break
+                
+                case "partial_result":
+                  setPartialResult(data.data)
+                  setTimeout(() => {
+                    if (typeof document !== 'undefined') {
+                      document.getElementById("result-section")?.scrollIntoView({ behavior: "smooth" })
+                    }
+                  }, 100)
+                  break
+                
+                case "final_result":
+                  setAnalysisResult(data.data)
+                  setIsOptimizing(false)
+                  break
+                
+                case "complete":
+                  setAnalysisProgress({ step: 4, total: 4, message: "分析完成！" })
+                  break
+                
+                case "error":
+                  throw new Error(data.error)
+              }
+            } catch (parseError) {
+              console.error("解析流数据错误:", parseError)
+            }
+          }
+        }
       }
     } catch (error) {
       console.error("分析错误:", error)
       alert("分析过程中出现错误，请稍后重试")
+      setPartialResult(null)
+      setAnalysisResult(null)
     } finally {
       setIsAnalyzing(false)
+      setIsOptimizing(false)
     }
   }
 
-  const handleJobInsight = async (insightType: string) => {
-    if (!jobDescription.trim()) {
-      alert("请先输入岗位描述")
-      return
-    }
-
-    if (jobInsights[insightType]) {
-      setActiveTab(insightType)
-      setTimeout(() => {
-        document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })
-      }, 100)
-      return
-    }
-
-    setIsGeneratingInsight(true)
+  // 生成单个洞察模块
+  const generateSingleInsight = async (insightType: string) => {
     try {
       const response = await fetch("/api/job-insights", {
         method: "POST",
@@ -139,18 +209,118 @@ export default function ResumeGenerator() {
           ...prev,
           [insightType]: result.data,
         }))
-        setActiveTab(insightType)
-        setTimeout(() => {
-          document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })
-        }, 100)
+        return true
       } else {
-        alert(`洞察生成失败: ${result.error}`)
+        console.error(`${insightType} 洞察生成失败:`, result.error)
+        return false
       }
+    } catch (error) {
+      console.error(`${insightType} 洞察生成错误:`, error)
+      return false
+    }
+  }
+
+  // 生成所有洞察模块
+  const handleGenerateAllInsights = async () => {
+    if (!jobDescription.trim()) {
+      alert("请先输入岗位描述")
+      return
+    }
+
+    // 检查是否所有洞察都已生成
+    const allInsightTypes = ["explanation", "simulation", "growth", "skills"]
+    const missingInsights = allInsightTypes.filter(type => !jobInsights[type])
+    
+    if (missingInsights.length === 0) {
+      // 所有洞察都已生成，直接跳转
+      setTimeout(() => {
+        if (typeof document !== 'undefined') {
+          document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })
+        }
+      }, 100)
+      return
+    }
+
+    setIsGeneratingInsight(true)
+    try {
+      // 并发生成所有缺失的洞察
+      const promises = missingInsights.map(type => generateSingleInsight(type))
+      await Promise.all(promises)
+      
+      // 跳转到洞察区域
+      setTimeout(() => {
+        if (typeof document !== 'undefined') {
+          document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })
+        }
+      }, 100)
     } catch (error) {
       console.error("洞察生成错误:", error)
       alert("洞察生成过程中出现错误，请稍后重试")
     } finally {
       setIsGeneratingInsight(false)
+    }
+  }
+
+  // 处理Tab点击
+  const handleJobInsight = async (insightType: string) => {
+    if (!jobDescription.trim()) {
+      alert("请先输入岗位描述")
+      return
+    }
+
+    // 如果该洞察已存在，直接切换Tab
+    if (jobInsights[insightType]) {
+      setActiveTab(insightType)
+      return
+    }
+
+    // 如果不存在，生成该洞察
+    setIsGeneratingInsight(true)
+    const success = await generateSingleInsight(insightType)
+    if (success) {
+      setActiveTab(insightType)
+    }
+    setIsGeneratingInsight(false)
+  }
+
+  // 处理反馈提交
+  const handleFeedbackSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+
+    if (!feedbackType || !feedbackContent.trim()) {
+      alert("请选择反馈类型并填写反馈内容")
+      return
+    }
+
+    setIsSubmittingFeedback(true)
+
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type: feedbackType,
+          content: feedbackContent,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        alert(result.message || "反馈提交成功！感谢您的宝贵意见。")
+        setFeedbackType("")
+        setFeedbackContent("")
+        setShowFeedback(false)
+      } else {
+        alert(result.error || "提交失败，请稍后重试")
+      }
+    } catch (error) {
+      console.error("反馈提交错误:", error)
+      alert("提交失败，请检查网络连接后重试")
+    } finally {
+      setIsSubmittingFeedback(false)
     }
   }
 
@@ -217,7 +387,15 @@ export default function ResumeGenerator() {
         
         .pixel-header h1 {
           margin: 0;
-          font-size: 28px;
+          font-size: 32px;
+        }
+        
+        .pixel-subtitle {
+          font-size: 16px;
+          color: var(--main-color);
+          opacity: 0.7;
+          margin-top: 8px;
+          font-weight: normal;
         }
         
         .pixel-grid {
@@ -365,6 +543,93 @@ export default function ResumeGenerator() {
           font-size: 14px;
           margin-top: 8px;
           color: #666;
+        }
+        
+        .progress-container {
+          margin-top: 20px;
+          padding: 16px;
+          background-color: #f8f9fa;
+          border: var(--pixel-size) solid var(--pixel-border);
+        }
+        
+        .progress-bar {
+          width: 100%;
+          height: 20px;
+          background-color: #e0e0e0;
+          border: var(--pixel-size) solid var(--pixel-border);
+          margin-bottom: 10px;
+          position: relative;
+          overflow: hidden;
+        }
+        
+        .progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--main-color), var(--secondary-color));
+          transition: width 0.5s ease;
+          position: relative;
+        }
+        
+        .progress-fill::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            rgba(255,255,255,0.4) 50%,
+            transparent 100%
+          );
+          animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        
+        .progress-text {
+          font-size: 14px;
+          color: var(--main-color);
+          font-weight: bold;
+          display: flex;
+          align-items: center;
+        }
+        
+        /* 优化后简历差异显示样式 */
+        .resume-diff-content {
+          color: #333 !important;
+          line-height: 1.8;
+          white-space: pre-wrap;
+        }
+        
+        .resume-added {
+          background-color: #e8f5e8;
+          color: #27ae60 !important;
+          padding: 2px 4px;
+          border-radius: 3px;
+          font-weight: bold;
+          border: 1px solid #27ae60;
+        }
+        
+        .resume-deleted {
+          background-color: #ffeaea;
+          color: #e74c3c !important;
+          padding: 2px 4px;
+          border-radius: 3px;
+          text-decoration: line-through;
+          border: 1px solid #e74c3c;
+        }
+        
+        .resume-optimized {
+          background-color: #fff3cd;
+          color: #ff8c00 !important;
+          padding: 2px 4px;
+          border-radius: 3px;
+          font-weight: bold;
+          border: 1px solid #ff8c00;
         }
         
 
@@ -697,13 +962,31 @@ export default function ResumeGenerator() {
       <div className="side-nav">
         <div
           className="side-nav-item"
-          onClick={() => document.getElementById("result-section")?.scrollIntoView({ behavior: "smooth" })}
+          onClick={() => {
+            if (typeof document !== 'undefined') {
+              document.getElementById("result-section")?.scrollIntoView({ behavior: "smooth" })
+            }
+          }}
         >
           📊<span className="side-nav-tooltip">转写结果</span>
         </div>
         <div
           className="side-nav-item"
-          onClick={() => document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })}
+          onClick={() => {
+            if (typeof document !== 'undefined') {
+              document.getElementById("optimized-resume-section")?.scrollIntoView({ behavior: "smooth" })
+            }
+          }}
+        >
+          📝<span className="side-nav-tooltip">优化后简历</span>
+        </div>
+        <div
+          className="side-nav-item"
+          onClick={() => {
+            if (typeof document !== 'undefined') {
+              document.getElementById("insight-section")?.scrollIntoView({ behavior: "smooth" })
+            }
+          }}
         >
           🔍<span className="side-nav-tooltip">岗位洞察</span>
         </div>
@@ -721,10 +1004,15 @@ export default function ResumeGenerator() {
           <div className="feedback-modal-title">
             <span className="pixel-character">💬</span> 反馈意见
           </div>
-          <form className="feedback-form">
+          <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
             <div className="feedback-item">
               <label className="feedback-label">反馈类型</label>
-              <select className="feedback-input">
+              <select 
+                className="feedback-input" 
+                value={feedbackType}
+                onChange={(e) => setFeedbackType(e.target.value)}
+                required
+              >
                 <option value="">请选择反馈类型</option>
                 <option value="bug">功能异常</option>
                 <option value="suggestion">功能建议</option>
@@ -734,17 +1022,27 @@ export default function ResumeGenerator() {
             </div>
             <div className="feedback-item">
               <label className="feedback-label">反馈内容</label>
-              <textarea className="feedback-textarea" placeholder="请详细描述您的反馈内容..."></textarea>
+              <textarea 
+                className="feedback-textarea" 
+                placeholder="请详细描述您的反馈内容..."
+                value={feedbackContent}
+                onChange={(e) => setFeedbackContent(e.target.value)}
+                required
+              />
             </div>
             <button
-              type="button"
+              type="submit"
               className="feedback-submit"
-              onClick={() => {
-                alert("反馈已提交！感谢您的宝贵意见。")
-                setShowFeedback(false)
-              }}
+              disabled={isSubmittingFeedback}
             >
-              提交反馈
+              {isSubmittingFeedback ? (
+                <>
+                  <Loader2 size={16} className="inline animate-spin" style={{ marginRight: "8px" }} />
+                  提交中...
+                </>
+              ) : (
+                "提交反馈"
+              )}
             </button>
           </form>
         </div>
@@ -752,14 +1050,19 @@ export default function ResumeGenerator() {
 
       <div className="pixel-container">
         <div className="pixel-header">
-          <h1>基于岗位描述一键转写简历</h1>
+          <h1>完美简历</h1>
+          <div className="pixel-subtitle">基于岗位描述一键转写简历</div>
           <div className="pixel-character">📝</div>
         </div>
 
         <div className="pixel-grid">
           <div className="pixel-box">
             <div className="pixel-box-title">请上传简历（仅支持1份）</div>
-            <div className="pixel-upload-box" onClick={() => document.getElementById("file-input")?.click()}>
+            <div className="pixel-upload-box" onClick={() => {
+              if (typeof document !== 'undefined') {
+                document.getElementById("file-input")?.click()
+              }
+            }}>
               <div className="pixel-icon">📄</div>
               <div>点击或拖拽文件上传</div>
               <input
@@ -845,7 +1148,7 @@ export default function ResumeGenerator() {
           </button>
           <button
             className="pixel-button insight"
-            onClick={() => handleJobInsight("explanation")}
+            onClick={handleGenerateAllInsights}
             disabled={isGeneratingInsight}
           >
             <span className="pixel-character">🔍</span>
@@ -860,53 +1163,116 @@ export default function ResumeGenerator() {
           </button>
         </div>
 
+        {/* 进度指示器 */}
+        {isAnalyzing && (
+          <div className="progress-container">
+            <div className="progress-bar">
+              <div 
+                className="progress-fill" 
+                style={{ width: `${(analysisProgress.step / analysisProgress.total) * 100}%` }}
+              />
+            </div>
+            <div className="progress-text">
+              <span className="pixel-character">⚡</span>
+              步骤 {analysisProgress.step}/{analysisProgress.total}: {analysisProgress.message}
+            </div>
+          </div>
+        )}
+
 
 
         <div className="pixel-result" id="result-section">
           <div className="pixel-result-title">转写结果</div>
 
           <div className="pixel-score-item">
-            <div>总匹配分数：{analysisResult?.matchScore || ""}/100</div>
+            <div>总匹配分数：{(analysisResult || partialResult)?.matchScore || ""}{(analysisResult || partialResult)?.matchScore ? "/100" : ""}</div>
           </div>
 
           <div className="pixel-score-item">
-            <div>匹配等级：{analysisResult?.matchLevel || ""}</div>
+            <div>匹配等级：{(analysisResult || partialResult)?.matchLevel || ""}</div>
           </div>
 
           {/* 详细分数显示 */}
-          {(analysisResult as any)?.detailedScore && (
+          {((analysisResult as any) || (partialResult as any))?.detailedScore && (
             <div className="pixel-score-item">
               <div style={{ fontWeight: "bold", marginBottom: "8px" }}>详细分数分解：</div>
               <div style={{ fontSize: "14px", lineHeight: "1.6" }}>
-                • 核心业务能力：{(analysisResult as any).detailedScore.core_capabilities || 0}/50分<br/>
-                • 替代经验价值：{(analysisResult as any).detailedScore.alternative_experiences || 0}/30分<br/>
-                • 其他匹配要素：{(analysisResult as any).detailedScore.other_factors || 0}/20分
+                • 核心业务能力：{((analysisResult as any) || (partialResult as any)).detailedScore.core_capabilities || 0}/50分<br/>
+                • 替代经验价值：{((analysisResult as any) || (partialResult as any)).detailedScore.alternative_experiences || 0}/30分<br/>
+                • 其他匹配要素：{((analysisResult as any) || (partialResult as any)).detailedScore.other_factors || 0}/20分
               </div>
             </div>
           )}
 
           <div className="pixel-score-item">
             <div>核心能力匹配情况：</div>
-            {analysisResult?.coreSkillsMatch && (
+            {(analysisResult || partialResult)?.coreSkillsMatch ? (
               <div style={{ marginTop: "8px" }} className="markdown-content">
-                <ReactMarkdown>{analysisResult.coreSkillsMatch}</ReactMarkdown>
+                <ReactMarkdown>{(analysisResult || partialResult)!.coreSkillsMatch}</ReactMarkdown>
+              </div>
+            ) : (
+              <div style={{ marginTop: "8px", color: "#666", fontStyle: "italic" }}>
+                {isAnalyzing && analysisProgress.step < 3 ? "正在分析中..." : "暂无数据"}
               </div>
             )}
           </div>
 
           <div className="pixel-score-item">
             <div>总结：</div>
-            {analysisResult?.summary && (
+            {(analysisResult || partialResult)?.summary ? (
               <div style={{ marginTop: "8px" }} className="markdown-content">
-                <ReactMarkdown>{analysisResult.summary}</ReactMarkdown>
+                <ReactMarkdown>{(analysisResult || partialResult)!.summary}</ReactMarkdown>
+              </div>
+            ) : (
+              <div style={{ marginTop: "8px", color: "#666", fontStyle: "italic" }}>
+                {isAnalyzing && analysisProgress.step < 3 ? "正在分析中..." : "暂无数据"}
               </div>
             )}
           </div>
         </div>
 
         {/* 优化后简历部分 */}
-        <div className="optimized-resume">
-          <div className="pixel-result-title">优化后简历</div>
+        <div className="optimized-resume" id="optimized-resume-section">
+          <div className="pixel-result-title">
+            优化后简历
+            {isOptimizing && (
+              <span style={{ marginLeft: "10px", fontSize: "14px", color: "#666" }}>
+                <Loader2 size={16} className="inline animate-spin" style={{ marginRight: "5px" }} />
+                正在生成中...
+              </span>
+            )}
+          </div>
+
+          {/* 颜色说明图例 */}
+          {analysisResult?.optimizedResume && (
+            <div style={{ 
+              padding: "12px", 
+              backgroundColor: "#f8f9fa", 
+              border: "2px solid #e0e0e0", 
+              marginBottom: "16px",
+              fontSize: "14px" 
+            }}>
+              <div style={{ fontWeight: "bold", marginBottom: "8px" }}>变更说明：</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <span className="resume-added" style={{ marginRight: "6px" }}>新增内容</span>
+                  <span style={{ color: "#666" }}>绿色显示</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <span className="resume-deleted" style={{ marginRight: "6px" }}>删除内容</span>
+                  <span style={{ color: "#666" }}>红色划线</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <span className="resume-optimized" style={{ marginRight: "6px" }}>优化内容</span>
+                  <span style={{ color: "#666" }}>橙色显示</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <span style={{ color: "#333", marginRight: "6px" }}>保持不变</span>
+                  <span style={{ color: "#666" }}>黑色显示</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="pixel-score-item">
             <div
@@ -919,8 +1285,21 @@ export default function ResumeGenerator() {
               }}
             >
               {analysisResult?.optimizedResume ? (
-                <div style={{ width: "100%", textAlign: "left", color: "#333" }} className="markdown-content">
-                  <ReactMarkdown>{analysisResult.optimizedResume}</ReactMarkdown>
+                <div 
+                  style={{ width: "100%", textAlign: "left" }} 
+                  className="resume-diff-content"
+                  dangerouslySetInnerHTML={{ 
+                    __html: parseOptimizedResume(analysisResult.optimizedResume)
+                      .replace(/\n/g, '<br/>') 
+                  }}
+                />
+              ) : isOptimizing ? (
+                <div style={{ textAlign: "center" }}>
+                  <Loader2 size={32} className="animate-spin" style={{ marginBottom: "10px" }} />
+                  <div>正在根据匹配分析结果生成优化后的简历...</div>
+                  <div style={{ fontSize: "14px", color: "#666", marginTop: "5px" }}>
+                    这可能需要1-2分钟，请耐心等待
+                  </div>
                 </div>
               ) : (
                 '点击"一键转写"按钮生成优化后的简历内容'

@@ -13,36 +13,108 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "API密钥未配置" }, { status: 500 })
     }
 
-    // 节点1：简历原始信息提取
-    const node1Result = await extractResumeInfo(resumeText, additionalExperience, apiKey)
-    
-    // 节点2：JD分析
-    const node2Result = await analyzeJobDescription(jobDescription, apiKey)
-    
-    // 节点3：匹配分析
-    const node3Result = await performMatchingAnalysis(node1Result, node2Result, jobDescription, apiKey)
-    
-    // 节点4：简历优化
-    const node4Result = await generateOptimizedResume(
-      node1Result, 
-      node2Result, 
-      node3Result, 
-      jobDescription, 
-      apiKey
-    )
+    // 创建流式响应
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          // 发送开始信号
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "progress",
+            step: 1,
+            total: 4,
+            message: "开始分析简历信息..."
+          })}\n\n`))
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        matchScore: node3Result.matchScore,
-        matchLevel: node3Result.matchLevel,
-        coreSkillsMatch: node3Result.coreSkillsMatch,
-        summary: node3Result.summary,
-        optimizedResume: node4Result,
-        // 可选：返回中间结果用于调试
-        rawResumeExtraction: node1Result,
-        jobAnalysis: node2Result
+          // 节点1：简历原始信息提取
+          const node1Result = await extractResumeInfo(resumeText, additionalExperience, apiKey)
+          
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "progress",
+            step: 2,
+            total: 4,
+            message: "正在分析岗位要求..."
+          })}\n\n`))
+
+          // 节点2：JD分析
+          const node2Result = await analyzeJobDescription(jobDescription, apiKey)
+          
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "progress",
+            step: 3,
+            total: 4,
+            message: "正在进行匹配分析..."
+          })}\n\n`))
+
+          // 节点3：匹配分析
+          const node3Result = await performMatchingAnalysis(node1Result, node2Result, jobDescription, apiKey)
+          
+          // 发送匹配分析结果
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "partial_result",
+            data: {
+              matchScore: node3Result.matchScore,
+              matchLevel: node3Result.matchLevel,
+              coreSkillsMatch: node3Result.coreSkillsMatch,
+              summary: node3Result.summary,
+              detailedScore: node3Result.detailedScore
+            }
+          })}\n\n`))
+
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "progress",
+            step: 4,
+            total: 4,
+            message: "正在生成优化后的简历..."
+          })}\n\n`))
+
+          // 节点4：简历优化
+          const node4Result = await generateOptimizedResume(
+            node1Result, 
+            node2Result, 
+            node3Result, 
+            jobDescription, 
+            apiKey
+          )
+
+          // 发送最终结果
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "final_result",
+            data: {
+              matchScore: node3Result.matchScore,
+              matchLevel: node3Result.matchLevel,
+              coreSkillsMatch: node3Result.coreSkillsMatch,
+              summary: node3Result.summary,
+              optimizedResume: node4Result,
+              detailedScore: node3Result.detailedScore,
+              rawResumeExtraction: node1Result,
+              jobAnalysis: node2Result
+            }
+          })}\n\n`))
+
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "complete"
+          })}\n\n`))
+
+          controller.close()
+        } catch (error) {
+          console.error("流式分析错误:", error)
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+            type: "error",
+            error: "分析过程中出现错误",
+            details: error instanceof Error ? error.message : "未知错误"
+          })}\n\n`))
+          controller.close()
+        }
       }
+    })
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
     })
   } catch (error) {
     console.error("简历分析错误:", error)
@@ -167,7 +239,7 @@ async function analyzeJobDescription(jobDescription: string, apiKey: string) {
 
 1. 业务与岗位概况：所属行业/岗位职级/角色在团队中的定位及价值
 2. 基本大盘：梳理职位的基础要求，包括学历背景、工作经验年限、语言能力、通用软件技能、综合能力等通用要求。
-3. 核心业务能力（必须）：分析JD中的关键专业技能，根据重要性评估各项能力的相对权重(以百分比表示)。列出3-5项核心能力，确保权重总和为100%。
+3. 核心业务能力（必须）：分析JD中的关键专业技能，根据重要性评估各项能力的相对权重(以百分比表示)。列出3-5项核心能力，最多五项，确保权重总和为100%。
 4. 次能力（加分项）：识别JD中提到但未作为必要条件的技能，以及行业内相关的加分能力。这些技能会使候选人在同等条件下脱颖而出。
 5. 工作信息：总结工作地点(Base)、期望入职时间、工作制度（全职/兼职/远程）、工作时长等相关信息。
 6. 替代性经验分析：
@@ -413,7 +485,7 @@ async function generateOptimizedResume(
 
   const optimizationPrompt = `### 角色
 
-你是一位资深简历优化专家。你将根据以下输入信息，为候选人生成一份适配目标岗位 JD 的优化简历版本
+你是一位资深简历优化专家。你将根据以下输入信息，为候选人生成一份适配目标岗位 JD 的优化简历版本，并标记所有变更。
 
 ### 参考内容：
 
@@ -476,9 +548,51 @@ async function generateOptimizedResume(
 
 ⸻
 
-✅ 输出格式：
-•	仅输出优化后的完整简历正文内容。
-•	禁止输出任何说明、注释、JSON或其他格式信息。`
+✅ 输出格式要求：
+**请严格使用以下标记格式来标识所有变更类型**：
+
+### 📝 标记使用规则：
+
+1. **保持不变的内容**：直接输出原文，无特殊标记
+   - 适用：原简历中已经很好且无需修改的内容
+
+2. **新增内容**：<add>新增的内容</add>
+   - 适用场景：
+     • 基于原有经历扩展的量化数据（如"提升效率XX%"）
+     • 根据JD要求补充的相关技能描述
+     • 基于STAR法则添加的成果描述
+     • 为突出匹配度而增加的行业关键词
+   - ⚠️ 注意：必须基于原简历真实内容，不得凭空编造
+
+3. **删除内容**：<del>被删除的内容</del>
+   - 适用场景：
+     • 与JD无关或匹配度低的经历描述
+     • 冗余、重复的表述
+     • 不够专业或过于口语化的表达
+     • 缺乏量化成果的空泛描述
+
+4. **局部优化内容**：<optimize>优化后的内容</optimize>
+   - 适用场景：
+     • 将通俗词汇替换为行业专业术语
+     • 调整表达方式以更符合JD要求
+     • 重新组织语言结构以突出重点
+     • 将被动表述改为主动表述
+     • 优化时间表述、职位名称等
+
+### 📋 实际应用示例：
+
+**原文**：在公司做产品相关工作，负责一些设计任务
+**优化后**：在<optimize>互联网公司担任产品设计实习生</optimize>，负责<optimize>用户体验设计与产品原型制作</optimize>，<add>完成15个功能模块设计，用户满意度提升25%</add><del>负责一些设计任务</del>
+
+**原文**：熟悉Python编程
+**优化后**：熟悉<optimize>Python数据分析与机器学习开发</optimize>，<add>掌握pandas、numpy、scikit-learn等核心库，完成3个数据挖掘项目</add>
+
+### ⚡ 执行要求：
+• 每处变更都必须使用对应标记，不得遗漏
+• 标记内容要与标记类型准确匹配
+• 保持标记的完整性，确保前端能正确解析
+• 输出完整的优化版简历正文，包含所有变更标记
+• 严禁输出任何解释说明、注释或其他格式信息`
 
   const response = await fetch("https://chat.ecnu.edu.cn/open/api/v1/chat/completions", {
     method: "POST",
