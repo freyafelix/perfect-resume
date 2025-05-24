@@ -20,14 +20,19 @@ interface JobInsight {
 }
 
 // 解析优化后简历的差异标记
-function parseOptimizedResume(content: string) {
-  if (!content) return content
-
-  // 替换标记为带样式的span
+const parseOptimizedResume = (content: string) => {
+  if (!content) return ""
+  
   return content
-    .replace(/<add>(.*?)<\/add>/g, '<span class="resume-added">$1</span>')
-    .replace(/<del>(.*?)<\/del>/g, '<span class="resume-deleted">$1</span>')
-    .replace(/<optimize>(.*?)<\/optimize>/g, '<span class="resume-optimized">$1</span>')
+    .replace(/\[ADD\](.*?)\[\/ADD\]/g, '<span class="resume-added">$1</span>')
+    .replace(/\[DEL\](.*?)\[\/DEL\]/g, '<span class="resume-deleted">$1</span>')
+    .replace(/\[OPT\](.*?)\[\/OPT\]/g, '<span class="resume-optimized">$1</span>')
+    .replace(/^## (.*$)/gm, '<h2 style="color: var(--main-color); font-weight: bold; margin: 16px 0 8px 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 4px;">$1</h2>')
+    .replace(/^### (.*$)/gm, '<h3 style="color: var(--main-color); font-weight: bold; margin: 12px 0 6px 0;">$1</h3>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--main-color); font-weight: bold;">$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/^[•-]\s*(.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px;">• $1</div>')
+    .replace(/\n/g, '<br>')
 }
 
 export default function ResumeGenerator() {
@@ -1179,8 +1184,6 @@ export default function ResumeGenerator() {
           </div>
         )}
 
-
-
         <div className="pixel-result" id="result-section">
           <div className="pixel-result-title">转写结果</div>
 
@@ -1243,38 +1246,25 @@ export default function ResumeGenerator() {
             )}
           </div>
 
-          {/* 颜色说明图例 */}
-          {analysisResult?.optimizedResume && (
-            <div style={{ 
-              padding: "12px", 
-              backgroundColor: "#f8f9fa", 
-              border: "2px solid #e0e0e0", 
-              marginBottom: "16px",
-              fontSize: "14px" 
-            }}>
-              <div style={{ fontWeight: "bold", marginBottom: "8px" }}>变更说明：</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center" }}>
-                  <span className="resume-added" style={{ marginRight: "6px" }}>新增内容</span>
-                  <span style={{ color: "#666" }}>绿色显示</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center" }}>
-                  <span className="resume-deleted" style={{ marginRight: "6px" }}>删除内容</span>
-                  <span style={{ color: "#666" }}>红色划线</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center" }}>
-                  <span className="resume-optimized" style={{ marginRight: "6px" }}>优化内容</span>
-                  <span style={{ color: "#666" }}>橙色显示</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center" }}>
-                  <span style={{ color: "#333", marginRight: "6px" }}>保持不变</span>
-                  <span style={{ color: "#666" }}>黑色显示</span>
+          <div className="pixel-score-item">
+            {/* 颜色说明图例 */}
+            {analysisResult?.optimizedResume && (
+              <div style={{ 
+                marginBottom: "16px", 
+                padding: "12px", 
+                backgroundColor: "#f8f9fa", 
+                border: "2px solid #e0e0e0",
+                fontSize: "14px"
+              }}>
+                <div style={{ fontWeight: "bold", marginBottom: "8px" }}>变更说明：</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
+                  <span><span className="resume-added">新增内容</span> 绿色显示</span>
+                  <span><span className="resume-deleted">删除内容</span> 红色划线</span>
+                  <span><span className="resume-optimized">优化内容</span> 橙色显示</span>
                 </div>
               </div>
-            </div>
-          )}
-
-          <div className="pixel-score-item">
+            )}
+            
             <div
               style={{
                 minHeight: "200px",
@@ -1289,8 +1279,7 @@ export default function ResumeGenerator() {
                   style={{ width: "100%", textAlign: "left" }} 
                   className="resume-diff-content"
                   dangerouslySetInnerHTML={{ 
-                    __html: parseOptimizedResume(analysisResult.optimizedResume)
-                      .replace(/\n/g, '<br/>') 
+                    __html: parseOptimizedResume(analysisResult.optimizedResume) 
                   }}
                 />
               ) : isOptimizing ? (
