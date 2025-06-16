@@ -172,14 +172,18 @@ ${additionalExperience ? `补充：${additionalExperience}` : ""}`
 
 // 节点2：JD分析
 async function analyzeJobDescription(jobDescription: string, apiKey: string) {
-  const analysisPrompt = `分析职位JD：${jobDescription}
-输出：
+  const analysisPrompt = `你的目标是为后续匹配简历做好结构化分析，尤其要识别最重要的1-3项核心能力。
+
+输出内容如下：
 1.岗位概况：行业/职级/定位
-2.必备要求：学历/经验/技能
-3.核心能力：3-5项关键技能(权重%)
-4.加分项：次要技能
-5.工作信息：地点/时间/制度
-6.替代经验：可接受的相似经验`
+2.关键要求（优先针对此岗位行业识别1-3项核心能力）：
+  - 核心能力（权重%）+ 理由
+  - 其他基本要求：学历、经验、语言等
+3.加分项：次要技能
+4.工作信息：工作地点、时间制度、是否远程等
+5.可替代经验：JD中未明示但合理的经验替代路径
+
+请重点关注核心能力。`
 
   const response = await fetch("https://chat.ecnu.edu.cn/open/api/v1/chat/completions", {
     method: "POST",
@@ -219,23 +223,39 @@ async function performMatchingAnalysis(resumeExtraction: string, jobAnalysis: st
 简历：${resumeExtraction}
 
 评估维度：
-1.核心能力匹配(50%权重)：从JD中识别并选择最重要的3-5个核心技能/能力进行逐项打分0-100%
+1.核心能力匹配(50%权重)：从JD中识别并选择最重要的1-3个核心技能/能力进行逐项打分0-100%
 2.替代经验价值(30%权重)：相似经验评估
 3.其他要素匹配(20%权重)：学历/地点等
 
 重要提醒：
-- abilities数组严格限制为3-5个最核心的能力
+- abilities数组严格限制为1-3个最核心的能力（与JD分析保持一致）
 - 优先选择JD中权重最高、最关键的技能
 - 不要列出次要或辅助技能
+- 只分析真正的核心竞争力，不是补充能力
+
+匹配度建议规则：
+- 如果匹配度 ≥ 80%，输出状态为"高度匹配"，改进建议为"无需修改，已充分匹配"
+- 如果匹配度在 60-79%，输出状态为"中度匹配"，必须提供具体的改进建议
+- 如果匹配度 < 60%，输出状态为"低匹配"，必须指出缺失内容和具体建议
 
 输出JSON格式：
 {
   "totalScore": 数字,
-  "level": "A/B+/B/C", 
   "abilities": [
-    {"ability":"第1个核心能力","match":百分比,"status":"匹配状态"},
-    {"ability":"第2个核心能力","match":百分比,"status":"匹配状态"},
-    {"ability":"第3个核心能力","match":百分比,"status":"匹配状态"}
+    {
+      "ability":"第1个核心能力",
+      "match":百分比数字,
+      "status":"高度匹配/中度匹配/低匹配",
+      "alternative":"替代经验描述（如有）",
+      "improvement":"具体改进建议（根据匹配度规则生成）"
+    },
+    {
+      "ability":"第2个核心能力",
+      "match":百分比数字,
+      "status":"高度匹配/中度匹配/低匹配",
+      "alternative":"替代经验描述（如有）",
+      "improvement":"具体改进建议（根据匹配度规则生成）"
+    }
   ],
   "detailedScore": {
     "core_capabilities": 核心能力得分(0-50),
@@ -244,6 +264,30 @@ async function performMatchingAnalysis(resumeExtraction: string, jobAnalysis: st
   },
   "summary": "总结建议"
 }`
+
+  // 根据分数计算等级的函数
+  const calculateLevel = (totalScore: number, detailedScore: any) => {
+    const coreCapabilities = detailedScore?.core_capabilities || 0
+    const alternativeExperiences = detailedScore?.alternative_experiences || 0
+    const otherFactors = detailedScore?.other_factors || 0
+    
+    // 直接使用AI返回的各维度分数计算总分
+    // 核心能力匹配(50%权重)：0-50分
+    // 替代经验价值(30%权重)：0-30分  
+    // 其他要素匹配(20%权重)：0-20分
+    const calculatedTotalScore = coreCapabilities + alternativeExperiences + otherFactors
+    
+    // 根据总分判断等级
+    if (calculatedTotalScore >= 90) {
+      return "A级 (90-100分) 高度匹配"
+    } else if (calculatedTotalScore >= 80) {
+      return "B+级 (80-89分) 较好匹配"
+    } else if (calculatedTotalScore >= 70) {
+      return "B级 (70-79分) 基本匹配"
+    } else {
+      return "C级 (<70分) 匹配度低"
+    }
+  }
 
   const response = await fetch("https://chat.ecnu.edu.cn/open/api/v1/chat/completions", {
     method: "POST",
@@ -284,6 +328,13 @@ async function performMatchingAnalysis(resumeExtraction: string, jobAnalysis: st
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       const parsedResult = JSON.parse(jsonMatch[0])
+      
+      // 使用计算函数确定等级
+      const calculatedLevel = calculateLevel(
+        parsedResult.totalScore || 0, 
+        parsedResult.detailedScore
+      )
+      
       // 转换新格式到旧格式，保持向后兼容
       const formatAbilityAnalysis = (abilities: any[]) => {
         if (!abilities || abilities.length === 0) return "暂无能力分析数据"
@@ -302,7 +353,7 @@ async function performMatchingAnalysis(resumeExtraction: string, jobAnalysis: st
 
       return {
         matchScore: parsedResult.totalScore || 0,
-        matchLevel: parsedResult.level || "需要分析",
+        matchLevel: calculatedLevel,
         coreSkillsMatch: formatAbilityAnalysis(parsedResult.abilities || []),
         summary: parsedResult.summary || "分析完成，请查看详细内容",
         optimizedResume: parsedResult.abilities?.map((item: any) => item.improvement).join('\n') || "正在生成优化建议...",
@@ -352,31 +403,39 @@ async function generateOptimizedResume(
     level: matchingResult.matchLevel || "未评级"
   }
 
-  const optimizationPrompt = `基于匹配分析优化简历，使用特殊标记显示变化：
+  const optimizationPrompt = `基于匹配分析优化简历，严格基于原简历内容进行优化：
 原简历：${resumeExtraction}
 匹配结果：${summary}
 目标岗位：${jobDescription}
 
-优化要求：
-1.突出匹配的核心能力
-2.量化成果数据
-3.调整表述贴合JD用词
-4.保持真实性，不编造
+优化原则：
+1.仅基于原简历已有信息进行优化，绝不编造或添加虚假内容
+2.重新组织和表述现有经历，突出与目标岗位的匹配度
+3.量化已有成果数据，调整表述贴合JD用词
+4.优化简历结构和排版，提升可读性
+5.简历结构：
+   - 个人信息（基于原简历信息）
+   - 求职意向（基于原简历或推断）
+   - 工作经历（重新表述现有经历，突出相关性）
+   - 项目经历（基于原简历项目，选择最相关的）
+   - 技能优势（基于原简历技能，重新组织）
+
+内容要求：
+- 严格基于原简历内容，不添加任何虚假信息
+- 重新表述和组织现有信息，使其更符合目标岗位要求
+- 每段经历用简洁要点描述，突出关键成果
+- 如果原简历缺少某些信息，标注"待补充"而不是编造
 
 输出格式使用以下标记：
-- [ADD]新增内容[/ADD] - 标记新增的内容
-- [DEL]删除内容[/DEL] - 标记需要删除的内容  
 - [OPT]优化内容[/OPT] - 标记优化修改的内容
+- [REORG]重新组织[/REORG] - 标记重新组织的内容
 - 不变内容直接输出
+- 避免使用[ADD]标记，因为不应添加原简历没有的内容
 
 示例：
-## 个人信息
-姓名：张三
-[ADD]联系方式：phone@email.com[/ADD]
-
 ## 工作经历
-• [DEL]在某公司工作[/DEL][OPT]在知名互联网公司担任高级开发工程师[/OPT]
-• [ADD]负责核心业务系统开发，服务用户超过100万[/ADD]
+• [OPT]产品经理 | XX公司 | 2022.01-至今[/OPT]
+• [REORG]负责电商平台产品规划与用户体验优化，通过数据分析和用户调研驱动产品迭代[/REORG]
 
 直接输出优化后的完整简历正文，使用上述标记格式。`
 

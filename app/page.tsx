@@ -31,19 +31,83 @@ const parseOptimizedResume = (content: string) => {
     .replace(/^### (.*$)/gm, '<h3 style="color: var(--main-color); font-weight: bold; margin: 12px 0 6px 0;">$1</h3>')
     .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--main-color); font-weight: bold;">$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/^[•-]\s*(.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px;">• $1</div>')
-    .replace(/\n/g, '<br>')
+    // 优化：使用更紧凑的div布局，减少行间距
+    .replace(/^[•-]\s*(.*$)/gm, '<div style="margin: 1px 0; padding-left: 16px; line-height: 1.4;">• $1</div>')
+    // 处理普通行，去掉多余换行
+    .replace(/\n\n+/g, '\n')
+    .replace(/\n/g, '<br style="line-height: 1.2;">')
+}
+
+// 解析优化后简历的差异标记（保持颜色，用于对比视图）
+const parseOptimizedResumeForComparison = (content: string) => {
+  if (!content) return ""
+  
+  return content
+    .replace(/\[ADD\](.*?)\[\/ADD\]/g, '<span style="background-color: #e8f5e8; color: #2e7d32; padding: 2px 4px; border-radius: 3px;">$1</span>')
+    .replace(/\[DEL\](.*?)\[\/DEL\]/g, '<span style="background-color: #ffebee; color: #c62828; text-decoration: line-through; padding: 2px 4px; border-radius: 3px;">$1</span>')
+    .replace(/\[OPT\](.*?)\[\/OPT\]/g, '<span style="background-color: #fff3e0; color: #ef6c00; padding: 2px 4px; border-radius: 3px;">$1</span>')
+    .replace(/^## (.*$)/gm, '<h2 style="color: #1976d2; font-weight: bold; margin: 12px 0 6px 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 4px;">$1</h2>')
+    .replace(/^### (.*$)/gm, '<h3 style="color: #1976d2; font-weight: bold; margin: 8px 0 4px 0;">$1</h3>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong style="color: #1976d2; font-weight: bold;">$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/^[•-]\s*(.*$)/gm, '<div style="margin: 1px 0; padding-left: 16px; line-height: 1.4;">• $1</div>')
+    .replace(/\n\n+/g, '\n')
+    .replace(/\n/g, '<br style="line-height: 1.2;">')
+}
+
+// 简化的原简历格式化（仅用于下载功能）
+const formatOriginalResume = (content: string) => {
+  if (!content) return "未上传简历文件或文件解析失败"
+  
+  // 移除OCR标记和文件信息
+  let cleaned = content
+    .replace(/^=== .*简历内容 ===\s*/gm, '')
+    .replace(/^=== .*识别内容 ===\s*/gm, '')
+    .replace(/^文件名:.*$/gm, '')
+    .replace(/^=== .*内容 ===\s*/gm, '')
+    .replace(/^\s*文件名:\s*.*\.(pdf|docx?|txt|jpe?g|png)\s*$/gmi, '')
+    .trim()
+  
+  return cleaned
+}
+
+
+
+// 将格式化后的原简历转换为HTML结构（与优化简历保持一致）
+const formatOriginalResumeToHTML = (content: string) => {
+  const formatted = formatOriginalResume(content)
+  if (!formatted) return ""
+  
+  return formatted
+    // 转换标题
+    .replace(/^## (.*$)/gm, '<h2 style="color: #1976d2; font-weight: bold; margin: 12px 0 6px 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 4px;">$1</h2>')
+    .replace(/^### (.*$)/gm, '<h3 style="color: #1976d2; font-weight: bold; margin: 8px 0 4px 0;">$1</h3>')
+    // 转换加粗文本
+    .replace(/\*\*(.*?)\*\*/g, '<strong style="color: #1976d2; font-weight: bold;">$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // 转换列表项
+    .replace(/^[•-]\s*(.*$)/gm, '<div style="margin: 1px 0; padding-left: 16px; line-height: 1.4;">• $1</div>')
+    // 处理换行
+    .replace(/\n\n+/g, '\n')
+    .replace(/\n/g, '<br style="line-height: 1.2;">')
 }
 
 export default function ResumeGenerator() {
-  const [jobDescription, setJobDescription] = useState("")
-  const [additionalExperience, setAdditionalExperience] = useState("")
-  const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [resumeContent, setResumeContent] = useState("")
+  // 状态管理
+  const [file, setFile] = useState<File | null>(null)
+  const [originalContent, setOriginalContent] = useState<string>("")
+  const [parsedContent, setParsedContent] = useState<string>("") // 用于AI分析的解析内容
+  const [optimizedResume, setOptimizedResume] = useState<string>("")
+  const [isUploading, setIsUploading] = useState(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [showComparison, setShowComparison] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
+  const [jobDescription, setJobDescription] = useState<string>("")
+  const [insights, setInsights] = useState<string>("")
+  const [isAnalyzingJob, setIsAnalyzingJob] = useState(false)
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [jobInsights, setJobInsights] = useState<Record<string, JobInsight>>({})
   const [activeTab, setActiveTab] = useState("explanation")
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false)
   const [isParsingFile, setIsParsingFile] = useState(false)
   const [parsingProgress, setParsingProgress] = useState("")
@@ -56,36 +120,214 @@ export default function ResumeGenerator() {
   const [feedbackType, setFeedbackType] = useState("")
   const [feedbackContent, setFeedbackContent] = useState("")
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false)
+  // 新增：对比功能相关状态
+  const [copySuccess, setCopySuccess] = useState(false)
+  
+  // 新增：用于管理请求取消的 AbortController
+  const [currentAnalysisController, setCurrentAnalysisController] = useState<AbortController | null>(null)
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const validation = validateFile(file)
-    if (!validation.valid) {
-      alert(validation.error)
-      return
+  // 一键复制功能
+  const handleCopyResume = async () => {
+    if (!analysisResult?.optimizedResume) return
+    
+    try {
+      // 移除HTML标记，获取纯文本
+      const plainText = analysisResult.optimizedResume
+        .replace(/\[ADD\](.*?)\[\/ADD\]/g, '$1')
+        .replace(/\[DEL\](.*?)\[\/DEL\]/g, '')
+        .replace(/\[OPT\](.*?)\[\/OPT\]/g, '$1')
+        .replace(/^## (.*$)/gm, '$1')
+        .replace(/^### (.*$)/gm, '$1')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/^[•-]\s*(.*$)/gm, '• $1')
+        .replace(/<br>/g, '\n')
+        .replace(/<[^>]*>/g, '') // 移除所有HTML标签
+        .trim()
+      
+      await navigator.clipboard.writeText(plainText)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 2000)
+    } catch (error) {
+      console.error('复制失败:', error)
+      alert('复制失败，请手动选择文本复制')
     }
+  }
+
+  // 获取原简历的纯文本内容
+  const getOriginalResumeText = () => {
+    if (originalContent) {
+      // 对于图片OCR结果，进行基本清理
+      if (file?.type.startsWith('image/')) {
+        return originalContent
+          .replace(/^=== .*识别内容 ===\s*/gm, '')
+          .replace(/^文件名:.*$/gm, '')
+          .trim()
+      }
+      
+      // 对于其他文件类型，直接返回原始内容
+      return originalContent
+    }
+    return "未上传简历文件或文件解析失败"
+  }
+
+  // 将原简历内容转换为HTML显示格式（简化版）
+  const formatOriginalResumeToHTML = (content: string) => {
+    if (!content) return "<p>未上传简历文件或文件解析失败</p>"
+    
+    // 对于图片OCR结果，进行基本清理
+    let cleanContent = content
+    if (file?.type.startsWith('image/')) {
+      cleanContent = content
+        .replace(/^=== .*识别内容 ===\s*/gm, '')
+        .replace(/^文件名:.*$/gm, '')
+        .trim()
+    }
+    
+    // 简单的文本到HTML转换，保持原始格式
+    return cleanContent
+      .split('\n')
+      .map(line => {
+        const trimmedLine = line.trim()
+        if (!trimmedLine) return '<br/>'
+        
+        // 简单的格式化：加粗可能的标题
+        if (trimmedLine.match(/^(个人信息|工作经历|项目经历|教育背景|专业技能|自我评价|求职意向)/) ||
+            trimmedLine.match(/^\d{4}.*[-~至到].*\d{4}/) ||
+            trimmedLine.match(/^[\u4e00-\u9fa5]{2,4}$/)) {
+          return `<p style="font-weight: bold; margin: 8px 0 4px 0;">${trimmedLine}</p>`
+        }
+        
+        return `<p style="margin: 2px 0;">${trimmedLine}</p>`
+      })
+      .join('')
+  }
+
+  // 获取优化后简历的HTML内容（保持颜色标注）
+  const getOptimizedResumeHTML = () => {
+    if (!analysisResult?.optimizedResume) return ""
+    
+    return parseOptimizedResumeForComparison(analysisResult.optimizedResume)
+  }
+
+  // 获取优化后简历的纯文本内容
+  const getOptimizedResumeText = () => {
+    if (!analysisResult?.optimizedResume) return ""
+    
+    return analysisResult.optimizedResume
+      .replace(/\[ADD\](.*?)\[\/ADD\]/g, '$1')
+      .replace(/\[DEL\](.*?)\[\/DEL\]/g, '')
+      .replace(/\[OPT\](.*?)\[\/OPT\]/g, '$1')
+      .replace(/^## (.*$)/gm, '$1')
+      .replace(/^### (.*$)/gm, '$1')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/^[•-]\s*(.*$)/gm, '• $1')
+      .replace(/<br>/g, '\n')
+      .replace(/<[^>]*>/g, '')
+      .trim()
+  }
+
+  // 取消当前分析的函数
+  const cancelCurrentAnalysis = () => {
+    if (currentAnalysisController) {
+      currentAnalysisController.abort()
+      setCurrentAnalysisController(null)
+      setIsAnalyzing(false)
+      setIsOptimizing(false)
+      setAnalysisProgress({ step: 0, total: 4, message: "" })
+      setPartialResult(null)
+    }
+  }
+
+  // 删除简历文件的函数
+  const handleDeleteResume = () => {
+    if (isAnalyzing) {
+      const shouldContinue = confirm(
+        "删除简历文件将取消当前分析。是否继续？"
+      )
+      if (!shouldContinue) {
+        return
+      }
+      // 取消当前分析
+      cancelCurrentAnalysis()
+    }
+
+    const shouldDelete = confirm(
+      `确定要删除简历文件"${file?.name}"吗？`
+    )
+    if (shouldDelete) {
+      setFile(null)
+      setOriginalContent("")
+      setParsedContent("")
+      // 保留分析结果，直到下次分析时再清空
+      // setAnalysisResult(null)
+      // setPartialResult(null)
+      // 清空文件输入框
+      const fileInput = document.getElementById("file-input") as HTMLInputElement
+      if (fileInput) {
+        fileInput.value = ""
+      }
+    }
+  }
+
+  // 文件上传处理
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0]
+    if (!selectedFile) return
 
     try {
       setIsParsingFile(true)
-      setParsingProgress(getParsingProgress(file.type))
       
-      const content = await parseResumeFile(file)
-      setResumeContent(content)
-      setResumeFile(file)
-      setAnalysisResult(null) // 清除之前的分析结果
+      // 检查是否已有简历文件
+      if (file) {
+        const shouldReplace = confirm(
+          `已有简历文件"${file.name}"，是否替换为新文件"${selectedFile.name}"？`
+        )
+        if (!shouldReplace) {
+          setIsParsingFile(false)
+          event.target.value = "" // 清空文件选择
+          return
+        }
+      }
       
-      setParsingProgress("文件解析完成！")
-      setTimeout(() => {
-        setIsParsingFile(false)
-        setParsingProgress("")
-      }, 1000)
+      // 对于图片和文档文件，需要解析内容用于AI分析
+      if (selectedFile.type.startsWith('image/') || 
+          selectedFile.type.includes('pdf') || 
+          selectedFile.type.includes('word') || 
+          selectedFile.type.includes('document')) {
+        
+        const parsedText = await parseResumeFile(selectedFile)
+        setParsedContent(parsedText) // 用于AI分析
+        
+        // 对于图片，显示解析后的内容（因为原始内容是二进制）
+        if (selectedFile.type.startsWith('image/')) {
+          setOriginalContent(parsedText)
+        } else {
+          // 对于PDF和Word，尝试获取原始文本内容用于显示
+          try {
+            const originalText = await selectedFile.text()
+            setOriginalContent(originalText)
+          } catch {
+            // 如果无法获取原始文本，使用解析后的内容
+            setOriginalContent(parsedText)
+          }
+        }
+      } else {
+        // 对于纯文本文件，直接读取内容
+        const textContent = await selectedFile.text()
+        setOriginalContent(textContent)
+        setParsedContent(textContent)
+      }
+      
+      setFile(selectedFile)
+      // 保留分析结果，不在上传时清空
+      
     } catch (error) {
-      console.error("文件解析错误:", error)
-      alert(`文件解析失败: ${error instanceof Error ? error.message : '未知错误'}`)
+      console.error('文件上传失败:', error)
+      alert(`文件上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
+    } finally {
       setIsParsingFile(false)
-      setParsingProgress("")
     }
   }
 
@@ -95,14 +337,26 @@ export default function ResumeGenerator() {
       return
     }
 
+    // 如果已有正在进行的分析，先取消
+    if (currentAnalysisController) {
+      cancelCurrentAnalysis()
+    }
+
+    // 创建新的 AbortController
+    const controller = new AbortController()
+    setCurrentAnalysisController(controller)
+
     setIsAnalyzing(true)
+    // 清空之前的分析结果
     setPartialResult(null)
     setAnalysisResult(null)
+    setOptimizedResume("")
+    setShowComparison(false)
     setIsOptimizing(false)
     setAnalysisProgress({ step: 0, total: 4, message: "准备开始分析..." })
 
     try {
-      const resumeText = resumeContent || (resumeFile ? `已上传简历文件: ${resumeFile.name}` : "")
+      const resumeText = parsedContent || (file ? `已上传简历文件: ${file.name}` : "")
 
       const response = await fetch("/api/analyze-resume", {
         method: "POST",
@@ -112,8 +366,9 @@ export default function ResumeGenerator() {
         body: JSON.stringify({
           resumeText,
           jobDescription,
-          additionalExperience,
+          additionalExperience: insights,
         }),
+        signal: controller.signal // 添加取消信号
       })
 
       if (!response.ok) {
@@ -130,6 +385,12 @@ export default function ResumeGenerator() {
       let buffer = ""
 
       while (true) {
+        // 检查是否被取消
+        if (controller.signal.aborted) {
+          reader.cancel()
+          throw new Error("分析已被取消")
+        }
+
         const { done, value } = await reader.read()
         
         if (done) break
@@ -183,6 +444,10 @@ export default function ResumeGenerator() {
         }
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("分析已被用户取消")
+        return // 不显示错误提示，因为是用户主动取消
+      }
       console.error("分析错误:", error)
       alert("分析过程中出现错误，请稍后重试")
       setPartialResult(null)
@@ -190,6 +455,7 @@ export default function ResumeGenerator() {
     } finally {
       setIsAnalyzing(false)
       setIsOptimizing(false)
+      setCurrentAnalysisController(null)
     }
   }
 
@@ -606,8 +872,32 @@ export default function ResumeGenerator() {
         /* 优化后简历差异显示样式 */
         .resume-diff-content {
           color: #333 !important;
-          line-height: 1.8;
+          line-height: 1.3;
           white-space: pre-wrap;
+        }
+        
+        .resume-diff-content h2 {
+          margin: 12px 0 6px 0 !important;
+          line-height: 1.3 !important;
+        }
+        
+        .resume-diff-content h3 {
+          margin: 8px 0 4px 0 !important;
+          line-height: 1.3 !important;
+        }
+        
+        .resume-diff-content div {
+          margin: 0 0 2px 0 !important;
+          line-height: 1.3 !important;
+        }
+        
+        .resume-diff-content br {
+          line-height: 1.1 !important;
+        }
+        
+        .resume-diff-content p {
+          margin: 3px 0 !important;
+          line-height: 1.3 !important;
         }
         
         .resume-added {
@@ -894,19 +1184,19 @@ export default function ResumeGenerator() {
         .markdown-content h4 { font-size: 16px; }
         
         .markdown-content p {
-          margin: 8px 0;
-          line-height: 1.6;
+          margin: 6px 0;
+          line-height: 1.5;
         }
         
         .markdown-content ul,
         .markdown-content ol {
-          margin: 8px 0;
+          margin: 6px 0;
           padding-left: 20px;
         }
         
         .markdown-content li {
-          margin: 4px 0;
-          line-height: 1.5;
+          margin: 2px 0;
+          line-height: 1.4;
         }
         
         .markdown-content strong {
@@ -946,20 +1236,232 @@ export default function ResumeGenerator() {
           }
         }
         
+        /* 对比功能样式 */
+        .comparison-container {
+          display: flex;
+          gap: 20px;
+          margin-top: 20px;
+        }
+        
+        .comparison-panel {
+          flex: 1;
+          border: 2px solid var(--pixel-border);
+          background-color: white;
+          padding: 16px;
+          max-height: 600px;
+          overflow-y: auto;
+          border-radius: 6px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .comparison-title {
+          font-weight: bold;
+          font-size: 16px;
+          color: var(--main-color);
+          margin-bottom: 12px;
+          padding-bottom: 8px;
+          border-bottom: 2px solid #e0e0e0;
+          text-align: center;
+          background-color: #f8f9fa;
+          margin: -16px -16px 16px -16px;
+          padding: 12px 16px 8px 16px;
+        }
+        
+        .comparison-content {
+          font-size: 14px;
+          line-height: 1.4;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+        
+        .comparison-content h2 {
+          color: #1976d2 !important;
+          font-weight: bold !important;
+          margin: 12px 0 6px 0 !important;
+          border-bottom: 2px solid #e0e0e0 !important;
+          padding-bottom: 4px !important;
+        }
+        
+        .comparison-content h3 {
+          color: #1976d2 !important;
+          font-weight: bold !important;
+          margin: 8px 0 4px 0 !important;
+        }
+        
+        .comparison-content strong {
+          color: #1976d2 !important;
+          font-weight: bold !important;
+        }
+        
+        .comparison-content div {
+          margin: 0 0 2px 0 !important;
+          line-height: 1.3 !important;
+        }
+        
+        .comparison-content br {
+          line-height: 1.1 !important;
+        }
+        
+        /* 复制按钮样式 */
+        .copy-button {
+          background-color: var(--secondary-color);
+          color: white;
+          border: var(--pixel-size) solid var(--pixel-border);
+          padding: 8px 16px;
+          font-family: 'Courier New', monospace;
+          font-weight: bold;
+          font-size: 14px;
+          cursor: pointer;
+          transition: all 0.1s;
+          box-shadow: var(--pixel-size) var(--pixel-size) 0 0 rgba(0,0,0,0.5);
+          margin-left: 10px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        
+        .copy-button:hover {
+          transform: translate(-2px, -2px);
+          box-shadow: calc(var(--pixel-size) + 2px) calc(var(--pixel-size) + 2px) 0 0 rgba(0,0,0,0.5);
+        }
+        
+        .copy-button:active {
+          transform: translate(2px, 2px);
+          box-shadow: none;
+        }
+        
+        .copy-button.success {
+          background-color: #4caf50;
+          border-color: #4caf50;
+        }
+        
+        .compare-button {
+          background-color: #ff9800;
+          color: white;
+          border: var(--pixel-size) solid var(--pixel-border);
+          padding: 8px 16px;
+          font-family: 'Courier New', monospace;
+          font-weight: bold;
+          font-size: 14px;
+          cursor: pointer;
+          transition: all 0.1s;
+          box-shadow: var(--pixel-size) var(--pixel-size) 0 0 rgba(0,0,0,0.5);
+          margin-left: 10px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        
+        .compare-button:hover {
+          transform: translate(-2px, -2px);
+          box-shadow: calc(var(--pixel-size) + 2px) calc(var(--pixel-size) + 2px) 0 0 rgba(0,0,0,0.5);
+        }
+        
+        .compare-button:active {
+          transform: translate(2px, 2px);
+          box-shadow: none;
+        }
+        
         @media (max-width: 600px) {
           .side-nav {
             bottom: 20px;
             top: auto;
             transform: none;
             flex-direction: row;
+            width: auto;
+            height: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            gap: 10px;
+          }
+          
+          .side-nav-item {
+            width: 45px;
+            height: 45px;
+            font-size: 18px;
+          }
+          
+          .side-nav-tooltip {
+            bottom: 55px;
             right: auto;
             left: 50%;
             transform: translateX(-50%);
           }
           
-          .side-nav-tooltip {
-            display: none;
+          /* 对比功能响应式 */
+          .comparison-container {
+            flex-direction: column;
+            gap: 15px;
           }
+          
+          .comparison-panel {
+            max-height: 400px;
+          }
+          
+          .copy-button, .compare-button {
+            font-size: 12px;
+            padding: 6px 12px;
+            margin-left: 5px;
+          }
+          
+          .pixel-result-title {
+            flex-wrap: wrap;
+            gap: 10px;
+          }
+        }
+
+        /* 文件上传状态样式 */
+        .file-upload-success {
+          margin-top: 8px;
+          padding: 12px;
+          background-color: #e8f5e8;
+          border: 2px solid #4caf50;
+          border-radius: 6px;
+          font-size: 12px;
+        }
+        
+        .file-upload-processing {
+          margin-top: 8px;
+          padding: 8px;
+          background-color: #fff3cd;
+          border: 2px solid #ffc107;
+          border-radius: 6px;
+          font-size: 12px;
+          display: flex;
+          align-items: center;
+        }
+        
+        .structured-preview-btn {
+          background-color: #2196f3;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 6px 12px;
+          font-size: 12px;
+          cursor: pointer;
+          margin-right: 8px;
+          transition: all 0.2s;
+        }
+        
+        .structured-preview-btn:hover {
+          background-color: #1976d2;
+          transform: translateY(-1px);
+        }
+        
+        /* 对比模式提示框样式 */
+        .comparison-info {
+          margin-bottom: 16px;
+          padding: 12px;
+          background-color: #e3f2fd;
+          border: 2px solid #2196f3;
+          border-radius: 6px;
+          font-size: 14px;
+        }
+        
+        .comparison-info-title {
+          font-weight: bold;
+          margin-bottom: 8px;
+          color: #1976d2;
         }
       `}</style>
 
@@ -1073,14 +1575,14 @@ export default function ResumeGenerator() {
               <input
                 id="file-input"
                 type="file"
-                accept=".pdf,.docx,.doc,.jpg,.jpeg,.png,.txt"
+                accept=".pdf,.docx,.jpg,.jpeg,.png,.gif,.bmp,.txt"
                 onChange={handleFileUpload}
                 style={{ display: "none" }}
               />
             </div>
-            <div className="pixel-hint">支持的文件类型：PDF、Word文档、图片、文本文件</div>
-            <div className="pixel-hint">每个最大 50MB</div>
-            <div className="file-counter">文件数量：{resumeFile ? 1 : 0}/1</div>
+            <div className="pixel-hint">支持的文件类型：PDF、Word文档(.docx)、图片(JPG/PNG/GIF/BMP)、文本文件</div>
+            <div className="pixel-hint">文件大小：PDF/Word最大50MB，图片最大10MB</div>
+            <div className="file-counter">文件数量：{file ? 1 : 0}/1</div>
             {isParsingFile && (
               <div
                 style={{
@@ -1097,7 +1599,7 @@ export default function ResumeGenerator() {
                 {parsingProgress}
               </div>
             )}
-            {resumeFile && !isParsingFile && (
+            {file && !isParsingFile && (
               <div
                 style={{
                   marginTop: "8px",
@@ -1107,8 +1609,29 @@ export default function ResumeGenerator() {
                   fontSize: "12px",
                 }}
               >
-                已选择：{resumeFile.name}
-                {resumeContent && <div style={{ marginTop: "4px", color: "#666" }}>✅ 文件内容已解析</div>}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    已选择：{file.name}
+                    {originalContent && <div style={{ marginTop: "4px", color: "#666" }}>✅ 文件内容已解析</div>}
+
+                  </div>
+                  <button
+                    onClick={handleDeleteResume}
+                    style={{
+                      background: "#ff4757",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "4px",
+                      padding: "4px 8px",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      marginLeft: "8px"
+                    }}
+                    title="删除简历文件"
+                  >
+                    🗑️ 删除
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1130,8 +1653,8 @@ export default function ResumeGenerator() {
             <textarea
               className="pixel-textarea"
               placeholder="请输入内容"
-              value={additionalExperience}
-              onChange={(e) => setAdditionalExperience(e.target.value)}
+              value={insights}
+              onChange={(e) => setInsights(e.target.value)}
             />
           </div>
         </div>
@@ -1148,6 +1671,19 @@ export default function ResumeGenerator() {
               "一键转写"
             )}
           </button>
+          {isAnalyzing && (
+            <button 
+              className="pixel-button cancel" 
+              onClick={cancelCurrentAnalysis}
+              style={{
+                backgroundColor: "#ff4757",
+                borderColor: "#ff4757"
+              }}
+            >
+              <span className="pixel-character">⏹️</span>
+              取消分析
+            </button>
+          )}
           <button className="pixel-button secondary" onClick={() => setShowFeedback(true)}>
             <span className="pixel-character">💬</span> 反馈意见
           </button>
@@ -1244,11 +1780,41 @@ export default function ResumeGenerator() {
                 正在生成中...
               </span>
             )}
+            {/* 功能按钮 */}
+            {analysisResult?.optimizedResume && (
+              <div style={{ display: "inline-flex", alignItems: "center" }}>
+                <button
+                  className={`copy-button ${copySuccess ? 'success' : ''}`}
+                  onClick={handleCopyResume}
+                  title="复制优化后的简历内容"
+                >
+                  {copySuccess ? (
+                    <>
+                      <span>✅</span>
+                      已复制
+                    </>
+                  ) : (
+                    <>
+                      <span>📋</span>
+                      一键复制
+                    </>
+                  )}
+                </button>
+                <button
+                  className="compare-button"
+                  onClick={() => setShowComparison(!showComparison)}
+                  title="对比原简历和优化后简历"
+                >
+                  <span>🔍</span>
+                  {showComparison ? '收起对比' : '对比查看'}
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="pixel-score-item">
             {/* 颜色说明图例 */}
-            {analysisResult?.optimizedResume && (
+            {analysisResult?.optimizedResume && !showComparison && (
               <div style={{ 
                 marginBottom: "16px", 
                 padding: "12px", 
@@ -1265,35 +1831,62 @@ export default function ResumeGenerator() {
               </div>
             )}
             
-            <div
-              style={{
-                minHeight: "200px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#888",
-              }}
-            >
-              {analysisResult?.optimizedResume ? (
-                <div 
-                  style={{ width: "100%", textAlign: "left" }} 
-                  className="resume-diff-content"
-                  dangerouslySetInnerHTML={{ 
-                    __html: parseOptimizedResume(analysisResult.optimizedResume) 
-                  }}
-                />
-              ) : isOptimizing ? (
-                <div style={{ textAlign: "center" }}>
-                  <Loader2 size={32} className="animate-spin" style={{ marginBottom: "10px" }} />
-                  <div>正在根据匹配分析结果生成优化后的简历...</div>
-                  <div style={{ fontSize: "14px", color: "#666", marginTop: "5px" }}>
-                    这可能需要1-2分钟，请耐心等待
-                  </div>
+
+            
+            {/* 对比视图 */}
+            {showComparison && analysisResult?.optimizedResume ? (
+              <div className="comparison-container">
+                <div className="comparison-panel">
+                  <div className="comparison-title">📄 原简历（已结构化）</div>
+                  <div 
+                    className="comparison-content"
+                    dangerouslySetInnerHTML={{ 
+                      __html: formatOriginalResumeToHTML(originalContent) 
+                    }}
+                  />
                 </div>
-              ) : (
-                '点击"一键转写"按钮生成优化后的简历内容'
-              )}
-            </div>
+                <div className="comparison-panel">
+                  <div className="comparison-title">✨ 优化后简历</div>
+                  <div 
+                    className="comparison-content"
+                    dangerouslySetInnerHTML={{ 
+                      __html: getOptimizedResumeHTML() 
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              /* 单一视图 */
+              <div
+                style={{
+                  minHeight: "200px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#888",
+                }}
+              >
+                {analysisResult?.optimizedResume ? (
+                  <div 
+                    style={{ width: "100%", textAlign: "left" }} 
+                    className="resume-diff-content"
+                    dangerouslySetInnerHTML={{ 
+                      __html: parseOptimizedResume(analysisResult.optimizedResume) 
+                    }}
+                  />
+                ) : isOptimizing ? (
+                  <div style={{ textAlign: "center" }}>
+                    <Loader2 size={32} className="animate-spin" style={{ marginBottom: "10px" }} />
+                    <div>正在根据匹配分析结果生成优化后的简历...</div>
+                    <div style={{ fontSize: "14px", color: "#666", marginTop: "5px" }}>
+                      这可能需要1-2分钟，请耐心等待
+                    </div>
+                  </div>
+                ) : (
+                  '点击"一键转写"按钮生成优化后的简历内容'
+                )}
+              </div>
+            )}
           </div>
         </div>
 
